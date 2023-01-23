@@ -13,13 +13,26 @@ int main_tree(int argc, char *argv[])
     int beg;                  //! beginning coordinate for analysis
     int end;                  //! end coordinate for analysis
     int ref;                  //! ref
+    int ntaxa;
     long num_windows;         //! number of windows
     std::string msg;          //! string for error message
     bam_plbuf_t *buf;         //! pileup buffer
     treeData t;
 
-    // parse the command line options
-    std::string region = t.parseCommandLine(argc, argv);
+
+    // parse the command line optionsg
+    //std::string region = t.parseCommandLine(argc, argv);
+    std::vector<std::string> regions = t.parseCommandLine(argc, argv);
+
+    if ( regions.size() < 1 ) { fatal_error("Need to specify at least 1 genomic region.", __FILE__, __LINE__, 0); }
+
+    // Print out regions to process
+    std::cerr << "Regions to process: ";
+    for(int i=0; i < regions.size(); i++){
+       std::cerr << regions[ i];
+       if (i < regions.size()-1) std::cerr << ",";
+       std::cerr << std::endl;
+    }
 
     // check input BAM file for errors
     t.checkBAM();
@@ -34,95 +47,141 @@ int main_tree(int argc, char *argv[])
     t.em = errmod_init(1.-0.83);
 
     // extract name of reference sequence
-    t.refid = get_refid(t.h->text);
+    t.refid = get_refid(t.h->text); // AS-field for @SQ 
 
-    // parse genomic region
-    int k = bam_parse_region(t.h, region, &chr, &beg, &end);
-    if (k < 0)
+
+
+    // Create diff matrix for carrying ons results between multiple regions
+    ntaxa = 1 + (t.sm->n);
+    unsigned short **diff_matrix = new unsigned short* [ntaxa];
+    for (int i=0; i < ntaxa; i++)
     {
-        msg = "Bad genome coordinates: " + region;
-        fatal_error(msg, __FILE__, __LINE__, 0);
+        diff_matrix[ i] = new unsigned short [ntaxa]();
+        // initialize with zeros
+        for (int j=0; j < ntaxa; j++) {
+            diff_matrix[ i][ j] = 0;
+        }
     }
 
-    // fetch reference sequence
-    t.ref_base = faidx_fetch_seq(t.fai_file, t.h->target_name[chr], 0, 0x7fffffff, &(t.len));
 
-    // calculate the number of windows
-    if (t.flag & BAM_WINDOW)
-        num_windows = ((end-beg)-1)/t.win_size;
-    else
-    {
-        t.win_size = (end-beg);
-        num_windows = 1;
-    }
 
-    // iterate through all windows along specified genomic region
-    for (long cw=0; cw < num_windows; cw++)
-    {
-        // construct genome coordinate string
-        std::string scaffold_name(t.h->target_name[chr]);
-        std::ostringstream winc(scaffold_name);
-        winc.seekp(0, std::ios::end);
-        winc << ":" << beg+(cw*t.win_size)+1 << "-" << ((cw+1)*t.win_size)+(beg-1);
-        std::string winCoord = winc.str();
+    // For each region
+    for(int r=0; r < regions.size(); r++) {
 
-        // initialize number of sites to zero
-        t.num_sites = 0;
+        std::string region = regions[ r];
+        std::cerr << "Processing region: " << region << std::endl;
 
-        // parse the BAM file and check if region is retrieved from the reference
-        if (t.flag & BAM_WINDOW)
+        // parse genomic region
+        int k = bam_parse_region(t.h, region, &chr, &beg, &end);
+        if (k < 0)
         {
-            k = bam_parse_region(t.h, winCoord, &ref, &(t.beg), &(t.end));
-            if (k < 0)
-            {
-                msg = "Bad window coordinates " + winCoord;
-                fatal_error(msg, __FILE__, __LINE__, 0);
-            }
-        }
-        else
-        {
-            ref = chr;
-            t.beg = beg;
-            t.end = end;
-            if (ref < 0)
-            {
-                msg = "Bad scaffold name: " + region;
-                fatal_error(msg, __FILE__, __LINE__, 0);
-            }
-        }
-
-        // initialize tree-specific variables
-        t.init_tree();
-
-        // create population assignments
-        t.assign_pops();
-
-        // initialize pileup
-        buf = bam_plbuf_init(make_tree, &t);
-
-        // fetch region from bam file
-        if ((bam_fetch(t.bam_in->x.bam, t.idx, ref, t.beg, t.end, buf, fetch_func)) < 0)
-        {
-            msg = "Failed to retrieve region " + region + " due to corrupted BAM index file";
+            msg = "Bad genome coordinates: " + region;
             fatal_error(msg, __FILE__, __LINE__, 0);
         }
+    
+        // fetch reference sequence
+        t.ref_base = faidx_fetch_seq(t.fai_file, t.h->target_name[chr], 0, 0x7fffffff, &(t.len));
+    
+        // calculate the number of windows
+        if (t.flag & BAM_WINDOW)
+            num_windows = ((end-beg)-1)/t.win_size;
+        else
+        {
+            t.win_size = (end-beg);
+            num_windows = 1;
+        }
+    
+        // iterate through all windows along specified genomic region
+        for (long cw=0; cw < num_windows; cw++)
+        {
+            // construct genome coordinate string
+            std::string scaffold_name(t.h->target_name[chr]);
+            std::ostringstream winc(scaffold_name);
+            winc.seekp(0, std::ios::end);
+            winc << ":" << beg+(cw*t.win_size)+1 << "-" << ((cw+1)*t.win_size)+(beg-1);
+            std::string winCoord = winc.str();
+    
+            // initialize number of sites to zero
+            t.num_sites = 0;
+    
+            // parse the BAM file and check if region is retrieved from the reference
+            if (t.flag & BAM_WINDOW)
+            {
+                k = bam_parse_region(t.h, winCoord, &ref, &(t.beg), &(t.end));
+                if (k < 0)
+                {
+                    msg = "Bad window coordinates " + winCoord;
+                    fatal_error(msg, __FILE__, __LINE__, 0);
+                }
+            }
+            else
+            {
+                ref = chr;
+                t.beg = beg;
+                t.end = end;
+                if (ref < 0)
+                {
+                    msg = "Bad scaffold name: " + region;
+                    fatal_error(msg, __FILE__, __LINE__, 0);
+                }
+            }
+    
+            // initialize tree-specific variables
+            t.init_tree();
+    
+            // create population assignments
+            t.assign_pops();
+    
+            // initialize pileup
+            buf = bam_plbuf_init(make_tree, &t);
+    
+            // fetch region from bam file
+            if ((bam_fetch(t.bam_in->x.bam, t.idx, ref, t.beg, t.end, buf, fetch_func)) < 0)
+            {
+                msg = "Failed to retrieve region " + region + " due to corrupted BAM index file";
+                fatal_error(msg, __FILE__, __LINE__, 0);
+            }
+    
+            // finalize pileup
+            bam_plbuf_push(0, buf);
+    
+            
+            //restore saved diff matrix into tree
+            for (int i=0; i < ntaxa; i++) {
+                for (int j=0; j < ntaxa; j++) {
+                    t.diff_matrix[ i][ j] = diff_matrix[ i][ j];
+                }
+            }
+            
+            // count pairwise differences
+            calc_diff_matrix(t);
+            bam_plbuf_destroy(buf);
+            free(t.ref_base);
 
-        // finalize pileup
-        bam_plbuf_push(0, buf);
+            //save diff matrix from tree
+            for (int i=0; i < ntaxa; i++) {
+                for (int j=0; j < ntaxa; j++) {
+                    diff_matrix[ i][ j] = t.diff_matrix[ i][ j];
+                    if ( diff_matrix[ i][ j] > 60000 ) { std::cerr << "WARNING: unsigned short overflow possible." << std::endl; }
+                }
+            }
 
-        // count pairwise differences
-        calc_diff_matrix(t);
 
-        // construct distance matrix
-        t.calc_dist_matrix();
+        } // window       
 
-        // construct nj tree
-        t.make_nj(chr);
+    } // regions
 
-        // take out the garbage
-        t.destroy_tree();
-        bam_plbuf_destroy(buf);
-    }
+    // construct distance matrix
+    t.calc_dist_matrix();
+
+    // construct nj tree
+    t.make_nj(chr);
+
+    // take out the garbage
+    t.destroy_tree();
+    //bam_plbuf_destroy(buf);
+
+    //}
     // end of window interation
 
     errmod_destroy(t.em);
@@ -130,7 +189,7 @@ int main_tree(int argc, char *argv[])
     bam_index_destroy(t.idx);
     t.bam_smpl_destroy();
     delete [] t.refid;
-    free(t.ref_base);
+    //free(t.ref_base);
 
     return 0;
 }
@@ -205,6 +264,7 @@ int make_tree(unsigned int tid, unsigned int pos, int n, const bam_pileup1_t *pl
     return 0;
 }
 
+// chr: index of chromosome
 void treeData::make_nj(int chr)
 {
     int i;
@@ -213,6 +273,7 @@ void treeData::make_nj(int chr)
 
     if ((num_sites < min_sites) || (segsites < 1))
     {
+        // Nothing to process
         std::cout << h->target_name[chr] << "\t" << beg+1 << "\t" << end+1 << "\t" << num_sites;
         std::cout << "\tNA" << std::endl;
         return;
@@ -260,6 +321,10 @@ void treeData::join_tree(tree curtree, node **cluster)
     double *av = NULL;
     double **x = NULL;
     double *R = NULL;
+
+    el[0]=1;
+    el[1]=1;
+    el[2]=1;
 
     try
     {
@@ -393,31 +458,61 @@ void treeData::join_tree(tree curtree, node **cluster)
     }
 
     // the last cycle
-    nude = 1;
+    nude = 0;
     for (i=1; i <= ntaxa; i++)
     {
         if (cluster[i-1] != 0)
         {
-            el[nude-1] = i;
+            el[nude] = i;
             nude++;
         }
     }
-    bi = (x[el[0]-1][el[1]-1]+x[el[0]-1][el[2]-1]-x[el[1]-1][el[2]-1])*0.5;
-    bj = x[el[0]-1][el[1]-1]-bi;
-    bk = x[el[0]-1][el[2]-1]-bi;
-    bi -= av[el[0]-1];
-    bj -= av[el[1]-1];
-    bk -= av[el[2]-1];
-    hookup(curtree.nodep[nextnode-1], cluster[el[0]-1]);
-    hookup(curtree.nodep[nextnode-1]->next, cluster[el[1]-1]);
-    hookup(curtree.nodep[nextnode-1]->next->next, cluster[el[2]-1]);
-    cluster[el[0]-1]->v = bi;
-    cluster[el[1]-1]->v = bj;
-    cluster[el[2]-1]->v = bk;
-    cluster[el[0]-1]->back->v = bi;
-    cluster[el[1]-1]->back->v = bj;
-    cluster[el[2]-1]->back->v = bk;
-    curtree.start = cluster[el[0]-1]->back;
+
+    if( nude >= 3) {
+
+        bi = (x[el[0]-1][el[1]-1]+x[el[0]-1][el[2]-1]-x[el[1]-1][el[2]-1])*0.5;
+        bj = x[el[0]-1][el[1]-1]-bi;
+        bk = x[el[0]-1][el[2]-1]-bi;
+
+        bi -= av[el[0]-1];
+        bj -= av[el[1]-1];
+        bk -= av[el[2]-1];
+
+        hookup(curtree.nodep[nextnode-1], cluster[el[0]-1]);
+        hookup(curtree.nodep[nextnode-1]->next, cluster[el[1]-1]);
+        hookup(curtree.nodep[nextnode-1]->next->next, cluster[el[2]-1]);
+        cluster[el[0]-1]->v = bi;
+        cluster[el[1]-1]->v = bj;
+        cluster[el[2]-1]->v = bk;
+        cluster[el[0]-1]->back->v = bi;
+        cluster[el[1]-1]->back->v = bj;
+        cluster[el[2]-1]->back->v = bk;
+
+        curtree.start = cluster[el[0]-1]->back;
+
+    } else { // <3 nudes
+
+        bi = (x[el[0]-1][el[1]-1])*0.5; // removed el[2] terms
+        bj = x[el[0]-1][el[1]-1]-bi;
+        //bk = x[el[0]-1][el[2]-1]-bi;
+
+        bi -= av[el[0]-1];
+        bj -= av[el[1]-1];
+        //bk -= av[el[2]-1];
+
+        hookup(curtree.nodep[nextnode-1], cluster[el[0]-1]);
+        hookup(curtree.nodep[nextnode-1]->next, cluster[el[1]-1]);
+        //hookup(curtree.nodep[nextnode-1]->next->next, cluster[el[2]-1]);
+        cluster[el[0]-1]->v = bi;
+        cluster[el[1]-1]->v = bj;
+        //cluster[el[2]-1]->v = bk;
+        cluster[el[0]-1]->back->v = bi;
+        cluster[el[1]-1]->back->v = bj;
+        //cluster[el[2]-1]->back->v = bk;
+
+        curtree.start = cluster[el[0]-1]->back;
+
+    }
 
     // take out the garbage
     delete [] av;
@@ -430,8 +525,16 @@ void treeData::join_tree(tree curtree, node **cluster)
 
 void treeData::hookup(node *p, node *q)
 {
-    assert(p != 0);
-    assert(q != 0);
+    if( p == 0 ) {
+        std::cerr << "p==0\n"; 
+        return; 
+    }
+    if( q == 0 ) {
+        std::cerr << "q==0\n"; 
+        return; }
+
+    //assert(p != 0);
+    //assert(q != 0);
     p->back = q;
     q->back = p;
 }
@@ -587,13 +690,15 @@ void treeData::free_tree(ptarray *treenode)
     free(*treenode);
 }
 
-std::string treeData::parseCommandLine(int argc, char *argv[])
+//std::string treeData::parseCommandLine(int argc, char *argv[])
+std::vector<std::string> treeData::parseCommandLine(int argc, char *argv[])
 {
 #ifdef _MSC_VER
     struct _stat finfo;
 #else
     struct stat finfo;
 #endif
+
     std::vector<std::string> glob_opts;
     std::string msg;
 
@@ -708,7 +813,15 @@ std::string treeData::parseCommandLine(int argc, char *argv[])
     }
 
     // return the index of first non-optioned argument
-    return glob_opts[1];
+    //return glob_opts[1];
+
+    std::vector<std::string> region_vec;
+    for(int i=1; i < glob_opts.size(); i++){
+       region_vec.push_back( glob_opts[ i]);
+    }
+
+    return region_vec;
+
 }
 
 treeData::treeData(void)

@@ -65,13 +65,16 @@ class treeData: public popbamData
 		// member public functions
 		void make_nj(int);
 		void calc_dist_matrix(void);
-		std::string parseCommandLine(int, char**);
+		//std::string parseCommandLine(int, char**);
+		std::vector<std::string> parseCommandLine(int, char**);
 		void init_tree(void);
 		void destroy_tree(void);
 
+		unsigned short **diff_matrix;           //!< Array of pairwise sequence differences
+
 	private:
 		// member private variables
-		unsigned short **diff_matrix;           //!< Array of pairwise sequence differences
+
 		double **dist_matrix;                   //!< Array of divergence calculations
 		int min_sites;                          //!< User-specified minimum number of aligned sites to perform analysis
 		int ntaxa;                              //!< Total number of tips in the tree
